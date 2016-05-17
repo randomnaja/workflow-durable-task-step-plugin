@@ -43,6 +43,7 @@ import org.kohsuke.stapler.DataBoundConstructor;
 
 import org.jenkinsci.plugins.workflow.steps.AbstractStepDescriptorImpl;
 import org.jenkinsci.plugins.workflow.steps.AbstractStepImpl;
+import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 
 import java.util.Set;
@@ -61,6 +62,7 @@ import java.util.Set;
 public final class ExecutorStep extends AbstractStepImpl {
 
     private final @CheckForNull String label;
+    private @CheckForNull Integer weight;
 
     @DataBoundConstructor public ExecutorStep(String label) {
         this.label = Util.fixEmptyAndTrim(label);
@@ -68,6 +70,15 @@ public final class ExecutorStep extends AbstractStepImpl {
     
     public @CheckForNull String getLabel() {
         return label;
+    }
+
+    public @CheckForNull Integer getWeight() {
+        return this.weight == null ? 1 : this.weight;
+    }
+
+    @DataBoundSetter
+    public void setWeight(int weight) {
+        this.weight = (weight == 0 ? 1 : weight);
     }
 
     @Extension public static final class DescriptorImpl extends AbstractStepDescriptorImpl {

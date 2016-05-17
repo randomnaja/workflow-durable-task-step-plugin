@@ -5,6 +5,8 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import hudson.EnvVars;
 import hudson.FilePath;
 import hudson.Launcher;
+import hudson.model.AbstractBuild;
+import hudson.model.AbstractProject;
 import hudson.model.Computer;
 import hudson.model.Executor;
 import hudson.model.Item;
@@ -16,6 +18,7 @@ import hudson.model.ResourceList;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.TopLevelItem;
+import hudson.model.queue.AbstractSubTask;
 import hudson.model.queue.CauseOfBlockage;
 import hudson.model.queue.SubTask;
 import hudson.remoting.ChannelClosedException;
@@ -27,9 +30,11 @@ import hudson.slaves.WorkspaceList;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -77,7 +82,7 @@ public class ExecutorStepExecution extends AbstractStepExecutionImpl {
      */
     @Override
     public boolean start() throws Exception {
-        final PlaceholderTask task = new PlaceholderTask(getContext(), step.getLabel(), run);
+        final PlaceholderTask task = new PlaceholderTask(getContext(), step.getLabel(), run, step.getWeight());
         if (Queue.getInstance().schedule2(task, 0).getCreateItem() == null) {
             // There can be no duplicates. But could be refused if a QueueDecisionHandler rejects it for some odd reason.
             throw new IllegalStateException("failed to schedule task");
@@ -154,6 +159,7 @@ public class ExecutorStepExecution extends AbstractStepExecutionImpl {
         private String label;
         /** Shortcut for {@link #run}. */
         private String runId;
+        private int weight;
         /**
          * Unique cookie set once the task starts.
          * Serves multiple purposes:
@@ -163,10 +169,11 @@ public class ExecutorStepExecution extends AbstractStepExecutionImpl {
          */
         private String cookie;
 
-        PlaceholderTask(StepContext context, String label, Run<?,?> run) {
+        PlaceholderTask(StepContext context, String label, Run<?,?> run, int weight) {
             this.context = context;
             this.label = label;
             runId = run.getExternalizableId();
+            this.weight = weight;
         }
 
         private Object readResolve() {
@@ -226,7 +233,47 @@ public class ExecutorStepExecution extends AbstractStepExecutionImpl {
         }
 
         @Override public Collection<? extends SubTask> getSubTasks() {
-            return Collections.singleton(this);
+
+            if (weight == 1 || weight == 0) {
+                return Collections.singleton(this);
+            } else {
+                List<SubTask> r = new ArrayList<SubTask>();
+                //must contain the primary task
+                r.add(this);
+                final Queue.Task ownerJob = this;
+
+                for (int i=1; i< weight; i++)
+                    r.add(new AbstractSubTask() {
+                        public Queue.Executable createExecutable() throws IOException {
+                            return new ExecutableImpl(ownerJob);
+                        }
+
+                        @Override
+                        public Object getSameNodeConstraint() {
+                            // must occupy the same node as the project itself
+                            return getProject();
+                        }
+
+                        @Override
+                        public long getEstimatedDuration() {
+                            return getProject().getEstimatedDuration();
+                        }
+
+                        public Queue.Task getOwnerTask() {
+                            return getProject();
+                        }
+
+                        public String getDisplayName() {
+                            return getProject().getDisplayName();
+                        }
+
+                        private Queue.Task getProject() {
+                            return ownerJob;
+                        }
+                    });
+
+                return r;
+            }
         }
 
         @Override public Queue.Task getOwnerTask() {
@@ -542,6 +589,32 @@ public class ExecutorStepExecution extends AbstractStepExecutionImpl {
             }
 
             private static final long serialVersionUID = 1L;
+        }
+
+        public static class ExecutableImpl implements Queue.Executable {
+            private final SubTask parent;
+            private final Executor executor = Executor.currentExecutor();
+
+            private ExecutableImpl(SubTask parent) {
+                this.parent = parent;
+            }
+
+            public SubTask getParent() {
+                return parent;
+            }
+
+            public AbstractBuild<?,?> getBuild() {
+                return (AbstractBuild<?,?>)executor.getCurrentWorkUnit().context.getPrimaryWorkUnit().getExecutable();
+            }
+
+            public void run() {
+                // nothing. we just waste time
+            }
+
+            @Override public long getEstimatedDuration() {
+                return parent.getEstimatedDuration();
+            }
+
         }
     }
 
